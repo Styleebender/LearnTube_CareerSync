@@ -16,6 +16,7 @@ from data_process import format_chat_data, process_job_data, process_linkedin_da
 from sample_data import data
 import agents_prompts
 import streamlit as st
+import linkedin_scraper
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -37,23 +38,50 @@ llm = ChatGoogleGenerativeAI(
 web_searcher_tool = TavilySearchResults(max_results=5)
 
 @tool
-def get_linkedin_profile_data():
-    """Fetch stored LinkedIn profile data."""
-    if st.session_state.isProfile:
-        profile_data = st.session_state.get('profile_data', 'Please enter a valid URL and try again.')
+def get_linkedin_profile_data(linkedin_url: str) -> dict:
+    """
+    Extract person's profile data from LinkedIn URL.
+    Args:
+        linkedin_url (str): Valid LinkedIn profile URL in format:
+                            https://www.linkedin.com/in/xxxxxxxxxxxxx/
+    Returns:
+        dict: Response JSON containing profile data
+    """
+    # Validate URL input
+    if not linkedin_url:
+        return {"success": False, "title": "Invalid Input", "msg": "No LinkedIn Profile URL provided." }
+    try:
+        profile_data = linkedin_scraper.get_profile_data(linkedin_url)
+        if profile_data['success'] == False:
+            return profile_data
         photo, background, formatted_data = process_linkedin_data(profile_data)
         return formatted_data
-    return "No LinkedIn profile URL provided. Please enter a valid URL and try again."
+    except Exception as e:
+            return {"success": False, "title": "Error", "msg": f"Error retrieving Linkedin Profile data: {str(e)}"}
 
 @tool
-def get_job_description_data():
-    """Fetch stored job description data."""
-    if st.session_state.isjob:
-        job_data = st.session_state.get('job_data', 'Please enter a valid URL and try again.')
-        formatted_data = process_job_data(job_data)
+def get_job_description_data(linkedin_job_url: str) -> dict:
+    """
+    Extract Job data from LinkedIn Job URL.
+    Args:
+        linkedin_job_url (str): Valid LinkedIn URL of the job with the following formats: 
+        https://www.linkedin.com/jobs/collections/recommended/?currentJobId=XXXXXXXXXX, 
+        https://www.linkedin.com/jobs/search/?currentJobId=XXXXXXXXXX or 
+        https://www.linkedin.com/jobs/view/XXXXXXXXXX/.
+    Returns:
+        dict: Response JSON containing job data
+    """
+    if not linkedin_job_url:
+        return {"success": False, "title": "Invalid Input", "msg": "No LinkedIn Job URL provided." }
+    try:
+        profile_data = linkedin_scraper.get_Job_data(linkedin_job_url)
+        if profile_data['success'] == False:
+            return profile_data
+        formatted_data = process_job_data(profile_data)
         return formatted_data
-    return "No LinkedIn Job URL provided. Please enter a valid URL and try again."
-
+    except Exception as e:
+            return {"success": False, "title": "Error", "msg": f"Error retrieving job description data: {str(e)}"}
+    
 
 # This is the default state same as "MessageState" TypedDict but allows us accessibility to custom keys
 class GraphsState(TypedDict):
@@ -122,7 +150,7 @@ def linkedin_profile_analyst(state: GraphsState) -> Command[Literal["supervisor"
     main_prompt = PromptTemplate.from_template(agents_prompts.LINKEDIN_PROFILE_ANALYST_AGENT)
 
     agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data], verbose=True,  handle_parsing_errors=True)
+    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data], verbose=True,  handle_parsing_errors=True, max_iterations=5)
 
     response = agent_executor.invoke({"input": query})
 
@@ -148,7 +176,7 @@ def job_fit_analyst(state: GraphsState) -> Command[Literal["supervisor"]]:
     main_prompt = PromptTemplate.from_template(agents_prompts.JOB_FIT_ABALYSIS_PROMPT)
 
     agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data, get_job_description_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, get_job_description_data], verbose=True, handle_parsing_errors=True)
+    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, get_job_description_data], verbose=True, handle_parsing_errors=True, max_iterations=5)
 
     response = agent_executor.invoke({"input": query})
     
@@ -174,7 +202,7 @@ def career_advisor(state: GraphsState) -> Command[Literal["supervisor"]]:
     main_prompt = PromptTemplate.from_template(agents_prompts.CAREER_ADVISOR_PROMPT)
 
     agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data, web_searcher_tool], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, web_searcher_tool], verbose=True, handle_parsing_errors=True)
+    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, web_searcher_tool], verbose=True, handle_parsing_errors=True, max_iterations=5)
 
     response = agent_executor.invoke({"input": query})    
     if state['output'] == "No outputs yet":
@@ -199,7 +227,7 @@ def cover_letter_generator(state: GraphsState) -> Command[Literal["supervisor"]]
     main_prompt = PromptTemplate.from_template(agents_prompts.COVER_LETTER_GENERATOR_PROMPT)
 
     agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data, get_job_description_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, get_job_description_data], verbose=True)
+    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, get_job_description_data], verbose=True, handle_parsing_errors=True, max_iterations=5)
 
     response = agent_executor.invoke({"input": query})
     
@@ -225,7 +253,7 @@ def opportunity_tracker(state: GraphsState) -> Command[Literal["supervisor"]]:
     main_prompt = PromptTemplate.from_template(agents_prompts.OPPORTUNITY_TRACKER_PROMPT)
 
     agent = create_react_agent(llm=llm, tools=[web_searcher_tool, get_linkedin_profile_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[web_searcher_tool, get_linkedin_profile_data])
+    agent_executor = AgentExecutor(agent=agent, tools=[web_searcher_tool, get_linkedin_profile_data], verbose=True, handle_parsing_errors=True, max_iterations=5)
 
     response = agent_executor.invoke({"input": query})
     
@@ -262,8 +290,8 @@ graph.add_edge(START, "supervisor")
 graph_runnable = graph.compile()
 
 # To generate the graph image
-from IPython.display import Image, display
-display(Image(graph_runnable.get_graph().draw_mermaid_png(output_file_path="graph.png")))
+# from IPython.display import Image, display
+# display(Image(graph_runnable.get_graph().draw_mermaid_png(output_file_path="graph.png")))
 
 
 # Without streaming
@@ -281,8 +309,10 @@ def test_invoke_our_graph(st_messages):
 # Test Query
 query = """
 Chat History: "No chat history"
-Current User Question: "Can you find some AI events or networking opportunities in Pune India"
+Current User Question: "Help me optimize my profile: https://www.linkedin.com/in/niranjan-khedkar123/"
 """
+
+# Help me optimize my profile: https://www.linkedin.com/in/niranjan-khedkar123/
 
 if __name__ == "__main__":
     print("test_response\n",test_invoke_our_graph(query))

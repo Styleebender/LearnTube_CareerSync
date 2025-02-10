@@ -24,10 +24,10 @@ def is_valid_linkedin_job__url(url):
     return True
 
 # Initialize session state
-if "isProfile" not in st.session_state:
-    st.session_state.isProfile = False
-if "isjob" not in st.session_state:
-    st.session_state.isjob = False
+# if "isProfile" not in st.session_state:
+#     st.session_state.isProfile = False
+# if "isjob" not in st.session_state:
+#     st.session_state.isjob = False
 if "messages" not in st.session_state:
     # Default initial message to render in message state
     st.session_state["messages"] = [AIMessage(content="Hi! 👋 I’m your AI career assistant. I can optimize your LinkedIn profile, analyze job fit, generate personalized cover letters, career recommendations and networking opportunities & events. Share your profile or a job link to get started!")]
@@ -41,35 +41,35 @@ if "messages" not in st.session_state:
 # disabled=st.session_state.chat_input, on_submit=disable_callback
 
 # Sidebar
-with st.sidebar:
-    st.header("Settings")
-    profile_url = st.text_input("Linkedin Profile URL")
+# with st.sidebar:
+#     st.header("Settings")
+#     profile_url = st.text_input("Linkedin Profile URL")
 
-    # Validate URL and show error message if invalid
-    if profile_url:
-        if not is_valid_linkedin_profile_url(profile_url):
-            st.error("Please enter a valid LinkedIn Profile URL", icon="🚨")
-        else:
-            # Call get_data function
-            profile_data = get_profile_data(profile_url)
-            if profile_data.get("success", False):
-                st.session_state.isProfile = True
-                st.session_state.profile_data = profile_data
-            else:
-                st.error(profile_data.get("msg", "An unknown error occurred") + " Please check the URL and try again", icon="🚨")
+#     # Validate URL and show error message if invalid
+#     if profile_url:
+#         if not is_valid_linkedin_profile_url(profile_url):
+#             st.error("Please enter a valid LinkedIn Profile URL", icon="🚨")
+#         else:
+#             # Call get_data function
+#             profile_data = get_profile_data(profile_url)
+#             if profile_data.get("success", False):
+#                 st.session_state.isProfile = True
+#                 st.session_state.profile_data = profile_data
+#             else:
+#                 st.error(profile_data.get("msg", "An unknown error occurred") + " Please check the URL and try again", icon="🚨")
 
-    job_url = st.text_input("Linkedin Job URL")
-    if job_url:
-        if not is_valid_linkedin_job__url(job_url):
-            st.error("Please enter a valid LinkedIn Job URL", icon="🚨")
-        else:
-            # Call get_data function
-            job_data = get_Job_data(job_url)
-            if job_data.get("success", False):
-                st.session_state.isjob = True
-                st.session_state.job_data = job_data
-            else:
-                st.error(job_data.get("msg", "An unknown error occurred") + " Please check the URL and try again", icon="🚨")
+#     job_url = st.text_input("Linkedin Job URL")
+#     if job_url:
+#         if not is_valid_linkedin_job__url(job_url):
+#             st.error("Please enter a valid LinkedIn Job URL", icon="🚨")
+#         else:
+#             # Call get_data function
+#             job_data = get_Job_data(job_url)
+#             if job_data.get("success", False):
+#                 st.session_state.isjob = True
+#                 st.session_state.job_data = job_data
+#             else:
+#                 st.error(job_data.get("msg", "An unknown error occurred") + " Please check the URL and try again", icon="🚨")
 
 # Loop through all messages in the session state and render them as a chat on every st.refresh mech
 for msg in st.session_state.messages:

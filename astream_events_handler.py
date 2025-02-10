@@ -18,14 +18,12 @@ async def invoke_our_graph(st_messages, st_placeholder):
     # Set up placeholders for displaying updates in the Streamlit app
     container = st_placeholder  # This container will hold the dynamic Streamlit UI components
     thoughts_placeholder = container.container()  # Container for displaying status messages
-    # token_placeholder = container.empty()  # Placeholder for displaying progressive token updates
     thinking_text = ""  # Will store the accumulated text from the model's response
     final_output = "" # Will store the final output from on_chain_end
     status = None
     # Stream events from the graph_runnable asynchronously
     async for event in graph_runnable.astream_events({"user_query": st_messages, "output": "No outputs yet"}, version="v2"):
         kind = event["event"]  # Determine the type of event received
-        print(" -----------------------kind------------------------------\n\n",kind)
         if status is None:
             status = thoughts_placeholder.status("Thinking & Actions...", expanded=True)
             
