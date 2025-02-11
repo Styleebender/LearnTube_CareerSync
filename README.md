@@ -8,7 +8,7 @@ Python 3.11 (preferred Python version)
 
 # Setup Instructions
 **1. Clone the Repository**
-```git clone https://github.com/your_username/your_repository.git```
+```git clone https://github.com/Styleebender/LearnTube_CareerSync.git```
 
 **2. Create a Virtual Environment**
 ```
