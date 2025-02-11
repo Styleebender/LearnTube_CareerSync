@@ -1,5 +1,6 @@
 import os
-from typing import Annotated, Literal, List, Optional
+import logging
+from typing import Annotated, Any, Literal, List, Optional
 from typing_extensions import TypedDict
 from langchain_core.tools import tool
 from langgraph.graph import START, StateGraph
@@ -12,14 +13,20 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_community.tools import TavilySearchResults
 from pydantic import BaseModel, Field
+# Local imports
 from data_process import format_chat_data, process_job_data, process_linkedin_data
-from sample_data import data
 import agents_prompts
-import streamlit as st
 import linkedin_scraper
 from dotenv import load_dotenv
 load_dotenv()
 
+
+# Logging Configuration
+logging.basicConfig(
+    filename='app.log',  # Log messages will be stored in 'app.log'
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 # LLM
 # gemini-2.0-flash-exp, gemini-1.5-pro, gemini-2.0-flash, gemini-1.5-flash, gemini-2.0-flash-thinking-exp-01-21
@@ -30,10 +37,7 @@ llm = ChatGoogleGenerativeAI(
     # streaming=True,
 )
 
-# Other Models
-# llm = ChatOpenAI(model="o1-mini")
-# llm = ChatAnthropic(model="Claude 3.5 Haiku", api_key=os.getenv("ANTHROPIC_API_KEY"))
-
+# Tools
 #Web Search Tool
 web_searcher_tool = TavilySearchResults(max_results=5)
 
@@ -51,13 +55,15 @@ def get_linkedin_profile_data(linkedin_url: str) -> dict:
     if not linkedin_url:
         return {"success": False, "title": "Invalid Input", "msg": "No LinkedIn Profile URL provided." }
     try:
+        logging.info("getting data from get_linkedin_profile_data tool")
         profile_data = linkedin_scraper.get_profile_data(linkedin_url)
         if profile_data['success'] == False:
             return profile_data
         photo, background, formatted_data = process_linkedin_data(profile_data)
         return formatted_data
     except Exception as e:
-            return {"success": False, "title": "Error", "msg": f"Error retrieving Linkedin Profile data: {str(e)}"}
+        logging.exception("Error retrieving LinkedIn Profile data ")
+        return {"success": False, "title": "Error", "msg": f"Error retrieving Linkedin Profile data: {str(e)}"}
 
 @tool
 def get_job_description_data(linkedin_job_url: str) -> dict:
@@ -74,22 +80,23 @@ def get_job_description_data(linkedin_job_url: str) -> dict:
     if not linkedin_job_url:
         return {"success": False, "title": "Invalid Input", "msg": "No LinkedIn Job URL provided." }
     try:
+        logging.info("getting data from get_job_description_data tool")
         profile_data = linkedin_scraper.get_Job_data(linkedin_job_url)
         if profile_data['success'] == False:
             return profile_data
         formatted_data = process_job_data(profile_data)
         return formatted_data
     except Exception as e:
-            return {"success": False, "title": "Error", "msg": f"Error retrieving job description data: {str(e)}"}
+        logging.exception("Error retrieving Job description data")
+        return {"success": False, "title": "Error", "msg": f"Error retrieving job description data: {str(e)}"}
     
 
-# This is the default state same as "MessageState" TypedDict but allows us accessibility to custom keys
+# Custom state for the graph.
 class GraphsState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    user_query: str
-    next: str
-    output: str
-    # Custom keys for additional data can be added here such as - conversation_id: str
+    messages: Annotated[list[AnyMessage], add_messages] # Final message will be added
+    user_query: str # contain the user query along with chat history data
+    next: str # Next route
+    output: str # Contain output of workers with tag
 
 class Router(BaseModel):
     """Worker to route to next. If no workers needed, route to FINISH."""
@@ -98,8 +105,67 @@ class Router(BaseModel):
 class GeneralChatAgent(BaseModel):
     reponse: str
 
-# Function to decide whether to continue tool usage or end the process
+
+# Helper function to create and execute a react agent node and return final output.
+def execute_react_agent(
+    state: GraphsState,
+    react_template: str,
+    prompt_template_str: str,
+    tools: List[Any],
+    worker_label: str,
+    verbose = True,
+    handle_parsing_errors = True,
+    max_iterations = 5
+) -> str:
+    """
+    Args:
+    :state: current state of the graph.
+    :react_template: template to create the query.
+    :prompt_template_str: main prompt string for the agent.
+    :tools: list of tools the agent can call.
+    :worker_label: label for the worker.
+    :verbose: logs.
+    :handle_parsing_errors: parsing issues.
+    :max_iterations: max llm steps
+    :return: A formatted output.
+    """
+    if state.get("output", "") == "No outputs yet":
+        state["output"] = ""
+
+    inputs = {
+        "user_query_details": state["user_query"],
+        "worker_outputs": state["output"],
+    }
+    query = react_template.format(**inputs)
+    main_prompt = PromptTemplate.from_template(prompt_template_str)
+    
+    try:
+        agent = create_react_agent(llm=llm, tools=tools, prompt=main_prompt)
+        agent_executor = AgentExecutor(
+            agent=agent,
+            tools=tools,
+            verbose=verbose,
+            handle_parsing_errors=handle_parsing_errors,
+            max_iterations = max_iterations
+        )
+        response = agent_executor.invoke({"input": query})
+        worker_output = response.get("output", "").strip()
+    except Exception as e:
+        logging.exception(f"Error in {worker_label}: {e}")
+        worker_output = f"[Error in {worker_label}: {e}]"
+    
+    # Append the worker's output to the state's output.
+    new_output = f"{state['output']}\nWorker-{worker_label}:\n{worker_output}"
+    return new_output
+
+
+# Function to decide whether to continue worker/agent usage or end the process by routing to FINISH
 def supervisor_node(state: GraphsState) -> Command[Literal["general_chat_handler", "linkedin_profile_analyst", "__end__"]]:
+    """
+    The supervisor node decides which worker should be called next,
+    or whether the chain should end.
+    """
+    logging.info("Executing supervisor_node...")
     superviso_data = {
         "supervisor_prompt": agents_prompts. SUPERVISOR_PROMPT,
         "user_query_details": state['user_query'],
@@ -116,14 +182,19 @@ def supervisor_node(state: GraphsState) -> Command[Literal["general_chat_handler
             "worker_outputs": state['output']
         }
         final_resp = llm.invoke(agents_prompts.FINAL_OUTPUT_FORMATTER.format(**inputs))
+        logging.info("FINISH node...")
         # goto = END
         return Command(goto=END, update={"next": goto,
                                       "messages": [ AIMessage(content=final_resp.content, name="supervisor")] })
     
     return Command(goto=goto, update={"next": goto,})
 
-
+# general_chat_handler node
 def general_chat_handler(state: GraphsState) -> Command[Literal["supervisor"]]:
+    """
+    A simple general chat handler that directly uses the LLM with structured output.
+    """
+    logging.info("Executing general_chat_handler agent...")
     inputs = {
         "user_query_details": state['user_query'],
         "worker_outputs": state['output']
@@ -136,141 +207,129 @@ def general_chat_handler(state: GraphsState) -> Command[Literal["supervisor"]]:
         update={
             "output": formatted_output
         },
-        # We want our workers to ALWAYS "report back" to the supervisor when done
+        # We want workers to ALWAYS "report back" to the supervisor when done
         goto="supervisor",
     )
 
-# *----------------------linkedin_profile_analyst-----------------------------
+# linkedin_profile_analyst node
 def linkedin_profile_analyst(state: GraphsState) -> Command[Literal["supervisor"]]:
-    inputs = {
-        "user_query_details": state['user_query'],
-        "worker_outputs": state['output']
-    }
-    query = agents_prompts.REACT_INVOKE_TEMPLATE.format(**inputs)
-    main_prompt = PromptTemplate.from_template(agents_prompts.LINKEDIN_PROFILE_ANALYST_AGENT)
+    """
+    Worker node for analyzing LinkedIn profile data.
+    """
+    logging.info("Executing linkedin_profile_analyst agent...")
 
-    agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data], verbose=True,  handle_parsing_errors=True, max_iterations=5)
-
-    response = agent_executor.invoke({"input": query})
-
-    if state['output'] == "No outputs yet":
-        state['output'] = ""
-    formatted_output = state["output"] + "\n" + "Worker-linkedin_profile_analyst:\n" + response['output']
+    formatted_output =  execute_react_agent(
+        state=state,
+        react_template=agents_prompts.REACT_INVOKE_TEMPLATE,
+        prompt_template_str=agents_prompts.LINKEDIN_PROFILE_ANALYST_AGENT,
+        tools=[get_linkedin_profile_data],
+        worker_label="linkedin_profile_analyst",
+    )
 
     return Command(
         update={
             "output": formatted_output
         },
-        # We want our workers to ALWAYS "report back" to the supervisor when done
+        # We want workers to ALWAYS "report back" to the supervisor when done
         goto="supervisor",
     )
 
-# *---------------------------job_fit_analyst--------------------------------
+# job_fit_analyst node
 def job_fit_analyst(state: GraphsState) -> Command[Literal["supervisor"]]:
-    inputs = {
-        "user_query_details": state['user_query'],
-        "worker_outputs": state['output']
-    }
-    query = agents_prompts.REACT_INVOKE_TEMPLATE.format(**inputs)
-    main_prompt = PromptTemplate.from_template(agents_prompts.JOB_FIT_ABALYSIS_PROMPT)
+    """
+    Worker node for analyzing job fit using LinkedIn profile and job description data.
+    """
+    logging.info("Executing job_fit_analyst agent...")
 
-    agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data, get_job_description_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, get_job_description_data], verbose=True, handle_parsing_errors=True, max_iterations=5)
-
-    response = agent_executor.invoke({"input": query})
-    
-    if state['output'] == "No outputs yet":
-        state['output'] = ""
-    formatted_output = state["output"] + "\n" + "Worker-job_fit_analyst:\n" + response['output']
+    formatted_output = execute_react_agent(
+        state=state,
+        react_template=agents_prompts.REACT_INVOKE_TEMPLATE,
+        prompt_template_str=agents_prompts.JOB_FIT_ABALYSIS_PROMPT,
+        tools=[get_linkedin_profile_data, get_job_description_data],
+        worker_label="job_fit_analyst",
+    )
 
     return Command(
         update={
             "output": formatted_output
         },
-        # We want our workers to ALWAYS "report back" to the supervisor when done
+        # We want workers to ALWAYS "report back" to the supervisor when done
         goto="supervisor",
     )
 
-#* --------------------------career_advisor-----------------------------------------------
+# career_advisor node
 def career_advisor(state: GraphsState) -> Command[Literal["supervisor"]]:
-    inputs = {
-        "user_query_details": state['user_query'],
-        "worker_outputs": state['output']
-    }
-    query = agents_prompts.REACT_INVOKE_TEMPLATE.format(**inputs)
-    main_prompt = PromptTemplate.from_template(agents_prompts.CAREER_ADVISOR_PROMPT)
+    """
+    Worker node for providing career advice using LinkedIn data and web search.
+    """
+    logging.info("Executing career_advisor agent...")
 
-    agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data, web_searcher_tool], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, web_searcher_tool], verbose=True, handle_parsing_errors=True, max_iterations=5)
-
-    response = agent_executor.invoke({"input": query})    
-    if state['output'] == "No outputs yet":
-        state['output'] = ""
-    formatted_output = state["output"] + "\n" + "Worker-career_advisor:\n" + response['output']
+    formatted_output = execute_react_agent(
+        state=state,
+        react_template=agents_prompts.REACT_INVOKE_TEMPLATE,
+        prompt_template_str=agents_prompts.CAREER_ADVISOR_PROMPT,
+        tools=[get_linkedin_profile_data, web_searcher_tool],
+        worker_label="career_advisor",
+    )
 
     return Command(
         update={
             "output": formatted_output
         },
-        # We want our workers to ALWAYS "report back" to the supervisor when done
+        # We want workers to ALWAYS "report back" to the supervisor when done
         goto="supervisor",
     )
 
-#* ---------------------------cover_letter_generator----------------------------------
+# cover_letter_generator node
 def cover_letter_generator(state: GraphsState) -> Command[Literal["supervisor"]]:
-    inputs = {
-        "user_query_details": state['user_query'],
-        "worker_outputs": state['output']
-    }
-    query = agents_prompts.REACT_INVOKE_TEMPLATE.format(**inputs)
-    main_prompt = PromptTemplate.from_template(agents_prompts.COVER_LETTER_GENERATOR_PROMPT)
+    """
+    Worker node for generating cover letters using LinkedIn and job description data.
+    """
+    logging.info("Executing cover_letter_generator agent...")
 
-    agent = create_react_agent(llm=llm, tools=[get_linkedin_profile_data, get_job_description_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[get_linkedin_profile_data, get_job_description_data], verbose=True, handle_parsing_errors=True, max_iterations=5)
-
-    response = agent_executor.invoke({"input": query})
-    
-    if state['output'] == "No outputs yet":
-        state['output'] = ""
-    formatted_output = state["output"] + "\n" + "Worker-cover_letter_generator:\n" + response['output']
+    formatted_output = execute_react_agent(
+        state=state,
+        react_template=agents_prompts.REACT_INVOKE_TEMPLATE,
+        prompt_template_str=agents_prompts.COVER_LETTER_GENERATOR_PROMPT,
+        tools=[get_linkedin_profile_data, get_job_description_data],
+        worker_label="cover_letter_generator",
+    )
 
     return Command(
         update={
             "output": formatted_output
         },
-        # We want our workers to ALWAYS "report back" to the supervisor when done
+        # We want workers to ALWAYS "report back" to the supervisor when done
         goto="supervisor",
     )
 
-# ----------------------------------------------------opportunity_tracker--------------------------------------------------------
+# opportunity_tracker node
 def opportunity_tracker(state: GraphsState) -> Command[Literal["supervisor"]]:
-    inputs = {
-        "user_query_details": state['user_query'],
-        "worker_outputs": state['output']
-    }
-    query = agents_prompts.REACT_INVOKE_TEMPLATE.format(**inputs)
-    main_prompt = PromptTemplate.from_template(agents_prompts.OPPORTUNITY_TRACKER_PROMPT)
+    """
+    Worker node for tracking opportunities using web search and LinkedIn data.
+    """
+    logging.info("Executing opportunity_tracker agent...")
 
-    agent = create_react_agent(llm=llm, tools=[web_searcher_tool, get_linkedin_profile_data], prompt=main_prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=[web_searcher_tool, get_linkedin_profile_data], verbose=True, handle_parsing_errors=True, max_iterations=5)
-
-    response = agent_executor.invoke({"input": query})
-    
-    if state['output'] == "No outputs yet":
-        state['output'] = ""
-    formatted_output = state["output"] + "\n" + "Worker-opportunity_tracker:\n" + response['output']
+    formatted_output = execute_react_agent(
+        state=state,
+        react_template=agents_prompts.REACT_INVOKE_TEMPLATE,
+        prompt_template_str=agents_prompts.OPPORTUNITY_TRACKER_PROMPT,
+        tools=[web_searcher_tool, get_linkedin_profile_data],
+        worker_label="opportunity_tracker",
+    )
 
     return Command(
         update={
             "output": formatted_output
         },
-        # We want our workers to ALWAYS "report back" to the supervisor when done
+        # We want workers to ALWAYS "report back" to the supervisor when done
         goto="supervisor",
     )
 
 
-
+# -----------------------------------------------------------------------------
+# Build and Compile the State Graph
+# -----------------------------------------------------------------------------
 # Define the structure (nodes and directional edges between nodes) of the graph
 graph = StateGraph(GraphsState)
 
@@ -294,6 +353,7 @@ graph_runnable = graph.compile()
 # display(Image(graph_runnable.get_graph().draw_mermaid_png(output_file_path="graph.png")))
 
 
+# Invoke Functions
 # Without streaming
 def invoke_our_graph(st_messages, callables):
     st_messages = format_chat_data(st_messages)
@@ -307,12 +367,16 @@ def test_invoke_our_graph(st_messages):
     return graph_runnable.invoke({"user_query": st_messages, "output": "No outputs yet"})
 
 # Test Query
-query = """
-Chat History: "No chat history"
-Current User Question: "Help me optimize my profile: https://www.linkedin.com/in/niranjan-khedkar123/"
-"""
-
-# Help me optimize my profile: https://www.linkedin.com/in/niranjan-khedkar123/
+def main() -> None:
+    """
+    For testing the graph.
+    """
+    test_query = """
+    Chat History: "No chat history"
+    Current User Question: "Can you find some AI events or networking opportunities in Pune India"
+    """
+    result = test_invoke_our_graph(test_query)
+    print(result)
 
 if __name__ == "__main__":
-    print("test_response\n",test_invoke_our_graph(query))
+    main()

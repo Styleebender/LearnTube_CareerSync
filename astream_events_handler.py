@@ -26,7 +26,6 @@ async def invoke_our_graph(st_messages, st_placeholder):
         kind = event["event"]  # Determine the type of event received
         if status is None:
             status = thoughts_placeholder.status("Thinking & Actions...", expanded=True)
-            
         if kind == "on_chat_model_stream":  
             # The event corresponding to a stream of new content (tokens or chunks of text)
             addition = event["data"]["chunk"].content  # Extract the new content chunk
@@ -35,7 +34,6 @@ async def invoke_our_graph(st_messages, st_placeholder):
                 # st.write(thinking_text + "done --\n\n")
                 status.write(f"Generating: {thinking_text}")
                 status.update(label="Thinking & Actions...", state="running", expanded=True)
-
 
         if kind == "on_tool_start":
             # The event signals that a tool is about to be called
@@ -57,7 +55,7 @@ async def invoke_our_graph(st_messages, st_placeholder):
                     output_placeholder.code(event['data'].get('output'))  # Display the tool's output
 
         elif kind == "on_chain_end":
-            # Assuming the final output is in the last message
+            # Final output is in the last message
             # Ensure 'data' and 'output' exist in the event
             if 'output' in event['data']:
                 output_data = event['data']['output']
@@ -72,6 +70,5 @@ async def invoke_our_graph(st_messages, st_placeholder):
         status.update(label="Thoughts & Actions...", state="complete", expanded=False)
     # Update the status to complete and collapse it
     
-    # Return the final output instead of final_text
     # Return the final aggregated message after all events have been processed
     return final_output

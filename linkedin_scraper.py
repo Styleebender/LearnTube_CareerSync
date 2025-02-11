@@ -6,6 +6,8 @@ from sample_data import data, job_data
 from dotenv import load_dotenv
 load_dotenv() ## loading all the environment variables
 
+
+# Scraping API DOCs: https://docs.scrapin.io/quickstart
 class ScrapinAPI:
     def __init__(self):
         """
