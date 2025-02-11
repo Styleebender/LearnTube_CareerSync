@@ -4,6 +4,7 @@ Your AI-Powered LinkedIn and Career Strategist!!
 AI-powered chatbot that helps users optimize their LinkedIn profiles, analyze job fit,  including personalized cover letters and career guidance.
 
 # Documentation:
+Architecture and approach overview
 <https://github.com/Styleebender/LearnTube_CareerSync/blob/main/Documentation.pdf>
 
 # Prerequisites
