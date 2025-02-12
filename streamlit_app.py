@@ -55,7 +55,8 @@ if prompt := st.chat_input():
     with st.chat_message("assistant"):
         # create a placeholder container for streaming and any other events to visually render here
         placeholder = st.container()
-        response = st.write(asyncio.run(invoke_our_graph(st.session_state.messages, placeholder)))
+        response = asyncio.run(invoke_our_graph(st.session_state.messages, placeholder))
+        st.write(response)
         st.session_state.messages.append(AIMessage(content=str(response)))
         
 
